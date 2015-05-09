@@ -13,6 +13,19 @@ This display & keypad provides a simple user interface, where the Up/Down button
 will ramp the speed from 1400 to 10,000RPM in steps of 200RPM, and the Left/Right
 Button select the display mode.
 
+Note: If on compiling this sketch you recieve this error:
+       fatal error: LCDKeypad.h: No such file or directory
+       compilation terminated.
+       Error compiling.
+
+Download the file found here:
+http://sainsmart.com/zen/documents/20-011-901/keypad_lcd.zip
+this link should download a file called keypad_lcd.zip.
+The Library file you're needing will be found under the Sub-folder
+keypad_lcd.zip\keypad_lcd\LCD1602for_023\LCDKeypad\
+There you will also find a "readme.txt" file.
+It will explain where these files need to be located in your Arduino directories.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -51,8 +64,9 @@ unsigned long now;
 //unsigned long CalcStrt; 
 //unsigned long CalcFnsh;
 
-int PWMpin = 13; //Note - Pin 13 has an LED connected on most Arduino boards.
-//                 When the pin is HIGH value, the LED is on, when the pin is LOW, it's off.
+int PWMpin = 13; //Leonardo
+//int PWMpin = 11; //UNO
+
 int calcrpm = 0;
 int GPIOpin = 1; // Use pin "0" [Pi IO header pin 11] to simulate a Clk pulse s$
 //int GPIOpinSlow = 4; //Under Speed LED
@@ -289,8 +303,10 @@ void setup()
    // set up the lcd's number of columns and rows: 
   lcd.begin(16, 2);
   //setup PWM frequency to ~60Hz for OutPut pins 13 & 11
-  TCCR4B = TCCR4B & 0b11111000 | 0x06; //Set Digital pin 13 [Spindle] PWM period @ ~2ms
-  attachInterrupt(0, SpindleTachInterrupt, FALLING); //digital pin 3; 
+  TCCR4B = TCCR4B & 0b11111000 | 0x06; // Leonardo; Set Digital pin 13 [Spindle] PWM period @ ~2ms
+  //TCCR2B = TCCR2B & 0b11111000 | 0x08; //UNO
+  attachInterrupt(0, SpindleTachInterrupt, FALLING); //Leonardo-digital pin 3; Uno Digital pin 2
+  //attachInterrupt(1, SpindleTachInterrupt, Falling); //UNO digital pin 3;
   pinMode(PWMpin, OUTPUT);
 // install  user defined special characters
   lcd.createChar(0, Char0);
