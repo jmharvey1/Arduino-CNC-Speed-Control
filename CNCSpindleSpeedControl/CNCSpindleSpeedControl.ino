@@ -13,18 +13,9 @@ This display & keypad provides a simple user interface, where the Up/Down button
 will ramp the speed from 1400 to 10,000RPM in steps of 200RPM, and the Left/Right
 Button select the display mode.
 
-Note: If on compiling this sketch you recieve this error:
-       fatal error: LCDKeypad.h: No such file or directory
-       compilation terminated.
-       Error compiling.
+Note: The LCDKeypadR1 Library is a derivative of the files found here:
 
-Download the file found here:
 http://sainsmart.com/zen/documents/20-011-901/keypad_lcd.zip
-this link should download a file called keypad_lcd.zip.
-The Library file you're needing will be found under the Sub-folder
-keypad_lcd.zip\keypad_lcd\LCD1602for_023\LCDKeypad\
-There you will also find a "readme.txt" file.
-It will explain where these files need to be located in your Arduino directories.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -46,7 +37,18 @@ THE SOFTWARE.
 ===============================================
  */
 #include <LiquidCrystal.h>
-#include <LCDKeypad.h>
+#include "LCDKeypadR1.h"
+
+#if defined(__AVR_ATmega32U4__)
+  //Code in here will only be compiled if an Arduino Leonardo is used.
+  #define TimerReg   TCCR4B
+  #define BoardType 0
+#endif
+#if defined(__AVR_ATmega16U4__)
+  //Code in here will only be compiled if an Arduino Uno is used.
+  #define TimerReg  TCCR2B
+  #define BoardType 1
+#endif
 
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7); //initialize Sansmart LCD Display
 LCDKeypad Keypad;
@@ -64,9 +66,7 @@ unsigned long now;
 //unsigned long CalcStrt; 
 //unsigned long CalcFnsh;
 
-int PWMpin = 13; //Leonardo
-//int PWMpin = 11; //UNO
-
+int PWMpin; // Digital Pin that PWM signal appears on (Pin 13 = Leonardo; Pin 11 = Uno)
 int calcrpm = 0;
 int GPIOpin = 1; // Use pin "0" [Pi IO header pin 11] to simulate a Clk pulse s$
 //int GPIOpinSlow = 4; //Under Speed LED
@@ -255,16 +255,6 @@ void SpindleTachInterrupt(void)
         calcrpm = ThisRPM;
        }
 
-//       AltRPM = (60000000*(eventCounter-2))/pulseperiod;//AltRPM = ThisRPM  = (60000000*(eventCounter-2))/pulseperiod;
-//       //if(abs(AltRPM-LastRPM) < abs(calcrpm-LastRPM) && abs(trgtRPM-calcrpm)>100) //(abs(100*LastRPM/trgtRPM)<6)
-//       if(abs(AltRPM-trgtRPM) < abs(calcrpm-trgtRPM) && abs(trgtRPM-LastRPM)<100)
-//         {
-//           calcrpm = AltRPM;
-//           //curspeed = LastRPM;
-//           sprintf (buf, "RPM %d ECnt %d\n", calcrpm, eventCounter);
-//           Serial1.println(buf); 
-//         }
-         //else curspeed = calcrpm;
       SpeedChange =  calcrpm -  LastRPM;
       //LastRPM = curspeed;
       LastRPM = calcrpm; 
@@ -302,11 +292,24 @@ void setup()
   //Serial1.begin(9600); // enable when bluetooth diagnostic is needed 
    // set up the lcd's number of columns and rows: 
   lcd.begin(16, 2);
+  byte Divisor;
   //setup PWM frequency to ~60Hz for OutPut pins 13 & 11
-  TCCR4B = TCCR4B & 0b11111000 | 0x06; // Leonardo; Set Digital pin 13 [Spindle] PWM period @ ~2ms
+  //TCCR4B = TCCR4B & 0b11111000 | 0x06; // Leonardo; Set Digital pin 13 [Spindle] PWM period @ ~2ms
   //TCCR2B = TCCR2B & 0b11111000 | 0x08; //UNO
-  attachInterrupt(0, SpindleTachInterrupt, FALLING); //Leonardo-digital pin 3; Uno Digital pin 2
-  //attachInterrupt(1, SpindleTachInterrupt, Falling); //UNO digital pin 3;
+  if (BoardType == 0) // Leonardo
+  {
+   PWMpin = 13; 
+   Divisor = 0x06;
+   attachInterrupt(0, SpindleTachInterrupt, FALLING); //Leonardo-digital pin 3; Uno Digital pin 2
+  }
+  else //Uno
+  {
+   PWMpin = 11;
+   Divisor = 0x08;
+   attachInterrupt(1, SpindleTachInterrupt, FALLING); //UNO digital pin 3;
+  }  
+  
+  TimerReg = TimerReg & 0b11111000 | Divisor;
   pinMode(PWMpin, OUTPUT);
 // install  user defined special characters
   lcd.createChar(0, Char0);
@@ -742,13 +745,14 @@ void UpDateSettings(int UsrInput, int mode)
            Mode = Mode +1;
            if (Mode == 8)
             {
-              Mode = 3;
+              //Mode = 3;
+              Mode = 4;
             }
          }
         else
          {
            Mode = Mode- 1;
-           if (Mode == 2)
+           if (Mode == 3)//if (Mode == 2)
             {
               Mode = 7;
             }
