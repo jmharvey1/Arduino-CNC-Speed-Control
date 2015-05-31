@@ -2,18 +2,19 @@
 This Program when loaded on an Arduino/Leonardo is a Tach based speed controller.
 It was originally written to operate a 400W/48VDC CNC spindle motor through
 a simple electronic controller, readily found on E-Bay
-This program assumes that the +PWM lead of this controller is connected to
-pin D13 of the Leonardo, and the collector output of the speed sensor 
+This program assumes that the +PWM lead of the controller is connected to
+pin D13 of the Leonardo (or Pin D11 on the UNO), and the collector output of the speed sensor 
 [OPB704 is a direct pin-for-pin replacement for the once popular,
 but now discontinued, QRB1114; the Parallax Inc 550-27401 or FairChild qrd1114
 might also maybe adapted to work] is connected to pin D3. 
 Note this collector is also tied +5Volts through a 20K pull-up resistor.
 It Furhter assumes that a Sansmart 16x2 LCD/KeyPad sheild has been installed.
 This display & keypad provides a simple user interface, where the Up/Down buttons
-will ramp the speed from 1400 to 10,000RPM in steps of 200RPM, and the Left/Right
-Button select the display mode.
+can be used to ramp the Set Speed from 1400 to 10,000 RPM, in steps of 200 RPM, 
+while the Left/Right Buttons will select the display mode.
 
-Note: The LCDKeypadR1 Library is a derivative of the files found here:
+Note: The LCDKeypadR1 Library, contained in this file set, 
+is a derivative of the files found here:
 
 http://sainsmart.com/zen/documents/20-011-901/keypad_lcd.zip
 
@@ -43,28 +44,35 @@ THE SOFTWARE.
   //Code in here will only be compiled if an Arduino Leonardo is used.
   #define TimerReg   TCCR4B
   #define BoardType 0
+  #define InterruptId 0
 #endif
 #if defined(__AVR_ATmega16U4__)
   //Code in here will only be compiled if an Arduino Uno is used.
   #define TimerReg  TCCR2B
   #define BoardType 1
+  #define InterruptId 1
+#endif
+
+#if defined(__AVR_ATmega328P__)
+  //Code in here will only be compiled if an Arduino Uno is used.
+  #define TimerReg  TCCR2B
+  #define BoardType 1
+  #define Interrupt 1
+  #define InterruptId 1
 #endif
 
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7); //initialize Sansmart LCD Display
 LCDKeypad Keypad;
 int trgtRPM = 5000;
-//unsigned long now = millis();
-//unsigned long now = micros(); //will overflow ~ every 70 minutes 
-
-//int timeChange = (now - lastTime);
-//if(timeChange>=SampleTimeP)
 unsigned long timeval = 0; 
 unsigned long Start = 0; 
 unsigned long Stop; 
+unsigned long WaitInterval =0;
 unsigned long startPrgm = millis()/1000; 
 unsigned long now; 
-//unsigned long CalcStrt; 
-//unsigned long CalcFnsh;
+int SampleCnt = 10; // Number Spindle Relolutions needed to make a new RPM calculation
+unsigned long period;
+unsigned long Maxperiod;
 
 int PWMpin; // Digital Pin that PWM signal appears on (Pin 13 = Leonardo; Pin 11 = Uno)
 int calcrpm = 0;
@@ -81,12 +89,9 @@ double kp, ki, kd;
 double Kp = 0.02;//0.06;
 double Ki = 0.05;//0.05;
 double Kd = 0.0005;//0.0005;
-//double OS = 18;
-//double BrkPt = 22;
-//double X = 0.0;
 double PIDOut = 0.0;
-double Max = 254.0;
-double Min = 0.0;
+double Max = 254.0; //max allowed PWM value
+double Min = 1.0; //min allowed PWM value
 int SampleTime = 60;// measured in milliseconds [FWIW: 10,000 RPM measured over 10 revolutions = 60 ms]
 int MstrSampleTime = SampleTime;
 
@@ -95,26 +100,21 @@ long int TotalRunTime = 0;
 int MaxRunTime = 0;//60*60*10;// number of seconds the program is allowed to run be
 int SpndlPWM;
 int newdutycycle = 0;
-//int range = 800; //the number Substeps the Mark/Space ratio can be divided into
-//int Maxdutycycle =  630;
-//int Mindutycycle = 23;
 int dutycycle = 30; // percentage of time clock is high
-int StrtDC = 0; // the calculated Start dutycycle needed to hit the target rpm $
-//int TooHighCnt = 0;
-//int TooLowCnt = 0;
-//int MaxChngLmt = 0;
-int LastRPM = 0;
-int AltRPM = 0;
-int SpeedChange = 0;
-int SuspectRdCnt = 0;
-bool increaseSpeed = true;
+//int StrtDC = 0; // the calculated Start dutycycle needed to hit the target rpm $
+
+//int LastRPM = 0;
+//int AltRPM = 0;
+//int SpeedChange = 0;
+//int SuspectRdCnt = 0;
+//bool increaseSpeed = true;
 bool NewTrgtVal = true; //used to determine if display needs updating
 bool ExitNow = false;
 bool NuInput = true;
-char *intFlgStat;
-int ThrtlLpCnt= 0;
-int Startup = 0; // Locks out pid calcs on startup to give the default throttle setting a chance to take effect before correcting it
-int CalcIntrvl = 0;
+//char *intFlgStat;
+//int ThrtlLpCnt= 0;
+//int Startup = 0; // Locks out pid calcs on startup to give the default throttle setting a chance to take effect before correcting it
+//int CalcIntrvl = 0;
 int BackLight = 6;  // set Display BackGround color to 1=Red; 2=Green; 4=Blue
 int Mode = 7;
 
@@ -202,81 +202,45 @@ static unsigned char Char5 [8] =
 // ================================================================
 
 // SpindleTachInterrupt:  called every time an event occurs
-
 void SpindleTachInterrupt(void)
 {
-   int ThisRPM = 0;
-   double pulseperiod = 0;
-//   if (Startup>0) // PID Lock out counter
-//   {
-//     LoopCounter = 1;
-//     Startup -= 1;
-//     return;
-//   }
-   if (eventCounter == 0)
+//   detachInterrupt(InterruptId);
+   unsigned long ThisIntTime = micros();
+   if (ThisIntTime < WaitInterval) return;
+   WaitInterval = ThisIntTime+3000; //move the next valid interrupt out by 3 milliSeconds (the squivalent of the spindle turning @ 20K RPM )
+   if (eventCounter == 1)
      {
-      Start = micros();//gettimeofday(&Start, NULL);
+      Start = ThisIntTime;
      }
-   if (eventCounter == 10)
+   if (eventCounter == SampleCnt+1)
      {
-      Stop = micros();//gettimeofday(&Stop, NULL);
+      period = ThisIntTime-Start;
      }
-   eventCounter +=1;//eventCounter++;
-///////////////////////////////////////////////////////////////////////////////
-    if (eventCounter < 11)// Let's see if there's enough samples to calc the current RPM
+   eventCounter +=1;
+   if (eventCounter >= SampleCnt+2)
+    {
+    if (period ==0) sprintf (buf,"Too Small");
+    else
      {
-      if (eventCounter < 3)
-       {
-        return; //No, there isn't enough samples
-       }
-      else
-       {
-        // yes there is, but does it seem like a reasonable value 
-        Stop = micros(); //gettimeofday(&CalcStrt, NULL);
-        //pulseperiod = ((Stop.tv_sec-Start.tv_sec)*1000000ULL+(Stop.tv_usec-Start.tv_usec));
-        pulseperiod = (Stop-Start);
-        ThisRPM  = (60000000*(eventCounter-1))/pulseperiod;
-        if (ThisRPM <1200 || ThisRPM > 4200)
-         {
-          return; // its too slow, or its going fast enough that we need to go for a full ten  
-                  // samples before deciding what to do with it
-         }
-       }
-     }
-   if (eventCounter >= 11 || ThisRPM >0 )// There's enough samples to calc the current RPM
-     {
-      if (eventCounter >= 11)
-       {
-        pulseperiod = (Stop-Start);
-        calcrpm = 600000000/pulseperiod;// calculate rpm based on having measured the period of 10 revolutions
-       }
-       else
-       {
-        calcrpm = ThisRPM;
-       }
-
-      SpeedChange =  calcrpm -  LastRPM;
-      //LastRPM = curspeed;
-      LastRPM = calcrpm; 
-      eventCounter = 0;
-      LoopCounter = 1;
-      //return; // temp stop for testing just the Tachometer portion of the code
-     
-      if (pulseperiod<0 )//|| pulseperiod > 600000
-       {
-         sprintf (buf, "Pulse Period Err");
-         //Serial1.println(buf); 
-        return; // disregard this result; it appears to be bogus
-       }
+      //int Freq  = (SampleCnt*1000000)/period; //Simple Frequency Counter (Hz) code
+      //sprintf (buf,"Hz: %d  ", Freq); //Simple Frequency Counter code
+     calcrpm =  (SampleCnt*60000000)/period;
+     if (calcrpm <=2800.0) SampleCnt = 2;
+     else SampleCnt = 10;
       
-      SampleTime = MstrSampleTime; 
-      SetTunings(Kp, Ki, Kd);
-      SpndlPWM = CalcMtrPID(calcrpm);//Max+CalcMtrPID(calcrpm);
-      analogWrite(PWMpin, SpndlPWM);
-      dutycycle = (int)((SpndlPWM*100)/(Max));//(int)((SpndlPWM*100)/(2*Max));// convert PWM signal to a precentage
      }
+     SampleTime = MstrSampleTime; 
+     SetTunings(Kp, Ki, Kd);
+     SpndlPWM = CalcMtrPID(calcrpm);//Max+CalcMtrPID(calcrpm);
+     analogWrite(PWMpin, SpndlPWM);
+     dutycycle = (int)((SpndlPWM*100)/(Max));//(int)((SpndlPWM*100)/(2*Max));// convert PWM signal to a precentage
+    LoopCounter = 1;//reset loopcounter so main loop will know that Motor is still running
+    eventCounter = 0;
+    }
+//   delay(3); //wait at least the equivalent of 20K rpm before reacting to another spindle interrupt
+//    attachInterrupt(InterruptId, SpindleTachInterrupt, FALLING);
+}
 
-   }
 // ================================================================
 // ===               END INTERRUPT DETECTION ROUTINE            ===
 // ================================================================
@@ -289,26 +253,30 @@ void SpindleTachInterrupt(void)
 
 void setup()
 {
-  //Serial1.begin(9600); // enable when bluetooth diagnostic is needed 
+  byte Divisor;
+  //Serial1.begin(9600); // enable when [Leonardo] bluetooth diagnostic is needed
+  //Serial.begin(9600);  // enable when/if diagnostic is needed
    // set up the lcd's number of columns and rows: 
   lcd.begin(16, 2);
-  byte Divisor;
-  //setup PWM frequency to ~60Hz for OutPut pins 13 & 11
-  //TCCR4B = TCCR4B & 0b11111000 | 0x06; // Leonardo; Set Digital pin 13 [Spindle] PWM period @ ~2ms
-  //TCCR2B = TCCR2B & 0b11111000 | 0x08; //UNO
-  if (BoardType == 0) // Leonardo
+  //calcrpm =  (SampleCnt*1000000*60)/period;//Formula used in interrupt routine to estimate current Spindle RMPM
+  calcrpm = 500; //minimum expected RPM
+  Maxperiod =(SampleCnt*1000000*60)/calcrpm;
+ 
+  pinMode(3, INPUT_PULLUP);//Set Interrupt input pin to have an active pullupresistor
+ if (BoardType == 0) // Leonardo
   {
    PWMpin = 13; 
-   Divisor = 0x06;
-   attachInterrupt(0, SpindleTachInterrupt, FALLING); //Leonardo-digital pin 3; Uno Digital pin 2
+   Divisor = 0x06;//0x06 original divisor used on Leonardo; new faster pwm divisor 0x04
+   //Serial.println("Leonardo");
   }
   else //Uno
   {
    PWMpin = 11;
-   Divisor = 0x08;
-   attachInterrupt(1, SpindleTachInterrupt, FALLING); //UNO digital pin 3;
+   Divisor = 0x03;
+   //Serial.println("Uno");
   }  
-  
+  attachInterrupt(InterruptId, SpindleTachInterrupt, FALLING); //UNO digital pin 3;
+   
   TimerReg = TimerReg & 0b11111000 | Divisor;
   pinMode(PWMpin, OUTPUT);
 // install  user defined special characters
@@ -328,6 +296,8 @@ void setup()
   //startPrgm = 1000*millis();
   long MaxRunTime = 60*60*10;// number of seconds the program is allowed to run be
 }
+
+
 // ================================================================
 // ===                    MAIN PROGRAM LOOP                     ===
 // ================================================================
@@ -335,10 +305,8 @@ void loop()
 {
   int UsrInput = 0;
   int stopCnt = 0;
-  //  lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, "Speed Cntl Ready") ;
   lcd.setCursor(0,1);
   lcd.print("Speed Cntl Ready");
-  //  lcdPosition (lcdHandle, 0, 1) ; lcdPrintf (lcdHandle, " Set RPM: %d",trgtRPM) ;
   lcd.setCursor(0,0);
   sprintf (buf,"Set RPM: %d", trgtRPM);
   lcd.print(buf);
@@ -346,33 +314,20 @@ void loop()
   //then LCD setup seemed to go OK, & you're ready to start the speed control stuff
 
   // Calc initial dutycycle based on trgtRPM
-  //dutycycle = (int) 75*(trgtRPM/9800.0)*(trgtRPM/9800.0) ;
-  //int valA = (trgtRPM - 1500)/140;
-   //StrtDC =((valA*valA)/14)+22;
-   //StrtDC = 30;
    SpndlPWM = (int) 95.0*(trgtRPM/9800.0)*(trgtRPM/9800.0) ; //190.5*(trgtRPM/9800.0)*(trgtRPM/9800.0)
 
-  //pinMode (GPIOpin, PWM_OUTPUT) ; //configure pin 1 as a PWM output
-  //pwmSetMode (PWM_MODE_MS); //configure PWM output to operate in Mark / Space mode
-  //pwmSetMode (PWM_MODE_BAL); //configure PWM output to operate in Mark / Balanced Mode
-  //pwmSetRange (range) ;// This sets the range register in the PWM generator. The default is 1024.
- // pwmSetClock (5) ;// This sets the divisor for the PWM clock.
-
-// pinMode (GPIOpinSlow, OUTPUT) ; //configure pin 1 as a simple output pin
-// digitalWrite (GPIOpinSlow, LOW); //set/force pin 4 output High[Under Speed LED off]
-// pinMode (GPIOpinOK, OUTPUT) ; //configure pin 5 as a simple output pin
-// digitalWrite (GPIOpinOK, LOW); //set/force pin 5 output  High[Speed Ok LED off]
-// pinMode (GPIOpinFast, OUTPUT) ; //configure pin 6 as a simple output pin
-// digitalWrite (GPIOpinFast, LOW); //set/force pin 6 output  High[Over Speed LED off]
-
-
-
-  // display counter value every 1/4 second.
+   // display counter value every 1/4 second.
   //sprintf (buf, "Time %d Max %d\n", TotalRunTime, MaxRunTime);
   //Serial1.println(buf);
   while ( TotalRunTime <= MaxRunTime && !ExitNow )
   {
     
+    if(micros()-Start>=Maxperiod ){// if true, it looks like the motor isn't turning
+      eventCounter = 0;
+      LoopCounter = 0;
+      Start = micros();
+      NewTrgtVal = true;
+    }
     while (eventCounter == 0 && LoopCounter == 0 &&  TotalRunTime <= MaxRunTime && !ExitNow)
      {
       //Motor is not running, So initialize PID for next startup
@@ -382,13 +337,13 @@ void loop()
       ITerm = 0.0; //kill any residual Integral component that might be left over from a previous run
       lastTime = millis();// reset/establish time mark for initial PID calculation   
       analogWrite(PWMpin, SpndlPWM); //start the PWM output
+      //sprintf (buf, "PWMpin:%02i PWM:%02i", PWMpin, SpndlPWM);
+      //Serial.println(buf);
       //Startup, in this version of the code is not used 
       //Startup = 60; // Locks out pid calcs on startup to give the default throttle setting a chance to take effect before correcting it
       delay(100);
       if (NewTrgtVal)
        {
-//         lcdPosition (lcdHandle, 0, 0) ;  lcdPrintf (lcdHandle, "Trgt RPM: %d   ", trgtRPM) ;
-//         lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "Speed Cntl Ready") ;
          lcd.setCursor(0,0); //lcd.setCursor(pos,line)
          sprintf (buf, "%s %04i ", "Trgt RPM:", trgtRPM);
          lcd.print(buf);
@@ -398,33 +353,13 @@ void loop()
        }
       UsrInput =  ScanButtons();
       UpDateSettings(UsrInput, Mode);
-      if (stopCnt == 0)
-       {
-//         Serial1.print( "Eventcount:%d ; Duty Cycle %d \n", eventCounter, dutycycle );
-//         digitalWrite (GPIOpinSlow, HIGH); //set/force pin 4 output High[Under Speed LED On]
-//         digitalWrite (GPIOpinOK, HIGH); //set/force pin 5 output  High[Speed Ok LED On]
-//         digitalWrite (GPIOpinFast, HIGH); //set/force pin 6 output  High[Over Speed LED On]
-       }
-      if (stopCnt == 5)
-       {
-//      delay( 500 ); // wait 1/2 second(s)
-//         digitalWrite (GPIOpinSlow, LOW); //set/force pin 4 output Low[Under Speed LED off]
-//         digitalWrite (GPIOpinOK, LOW); //set/force pin 5 output  Low[Speed Ok LED off]
-//         digitalWrite (GPIOpinFast, LOW); //set/force pin 6 output  Low[Over Speed LED off]
-       }
       long TotalRunTime = calcruntime();
-      SuspectRdCnt = 3;
+      //SuspectRdCnt = 3;
       stopCnt = stopCnt+1;
-      if (stopCnt == 10)
-       {
-        stopCnt = 0;
-       }
-     } // end 2nd inner While looop
-//   Serial1.print( "rpm: %d; trgtRPM: %d; Duty Cycle: %d; SpdChng: %d %s; EvntCnt: %d \n", calcrpm, trgtRPM,$
-   //lcdClear (lcdHandle) ;
+     } // end of 2nd inner While looop
+  //   Serial1.print( "rpm: %d; trgtRPM: %d; Duty Cycle: %d; SpdChng: %d %s; EvntCnt: %d \n", calcrpm, trgtRPM,$
    if (NewTrgtVal)
     {
-      //lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "Trgt RPM: %d   ", trgtRPM) ;
       lcd.setCursor(0,0); //lcd.setCursor(pos,line)
       sprintf (buf, "%s %04i ", "Trgt RPM:", trgtRPM);
       lcd.print(buf);
@@ -467,7 +402,6 @@ void loop()
       }
      else
       {
-//      strncpy(SgndErStr, SpdErStr, 6);
        strncpy(SgndErStr, " ", 8);
        strcat(SgndErStr, SpdErStr);
       }
@@ -557,9 +491,10 @@ void loop()
       //Serial1.print("Looks as if Motor has Stopped\n");
      }
    long TotalRunTime = calcruntime();
-  }
+  } //end of 1st while loop
  //kill the PWM signal
- digitalWrite (PWMpin, LOW);
+  detachInterrupt(InterruptId);
+  digitalWrite (PWMpin, LOW);
 // pinMode (GPIOpin, OUTPUT) ; //configure pin 1 as a simple output pin
 // digitalWrite (GPIOpin, LOW); //set/force pin 1 output to ground [low]
 // digitalWrite (GPIOpinSlow, LOW); //set/force pin 4 output High[Under Speed LED off]
@@ -576,6 +511,7 @@ void loop()
  lcd.setCursor(0,1); //lcd.setCursor(pos,line)
  sprintf (buf, "CYCLE PWR 2 STRT");
  lcd.print(buf);
+ delay(10000);
  return;
 }
 // ================================================================
