@@ -89,12 +89,13 @@ THE SOFTWARE.
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7); //initialize Sansmart LCD Display
 LCDKeypad Keypad;
 int trgtRPM = 5000;
-unsigned long timeval = 0; 
+unsigned long LstIntTime = 0; 
 unsigned long Start = 0; 
 unsigned long Stop; 
 unsigned long WaitInterval =0;
 unsigned long startPrgm = millis()/1000; 
-unsigned long now; 
+unsigned long now;
+unsigned long QrtrSecTimeOut = millis() ;
 int SampleCnt = 10; // Number Spindle Relolutions needed to make a new RPM calculation
 unsigned long period;
 unsigned long Maxperiod;
@@ -133,6 +134,7 @@ int dutycycle = 30; // percentage of time clock is high
 bool NewTrgtVal = true; //used to determine if display needs updating
 bool ExitNow = false;
 bool NuInput = true;
+bool ActivIntrpt = false;
 //char *intFlgStat;
 //int ThrtlLpCnt= 0;
 //int Startup = 0; // Locks out pid calcs on startup to give the default throttle setting a chance to take effect before correcting it
@@ -257,11 +259,13 @@ void SpindleTachInterrupt(void)
 {
 //   detachInterrupt(InterruptId);
    unsigned long ThisIntTime = micros();
+   LstIntTime = millis();
    if (ThisIntTime < WaitInterval) return;
    WaitInterval = ThisIntTime+3000; //move the next valid interrupt out by 3 milliSeconds (the squivalent of the spindle turning @ 20K RPM )
    if (eventCounter == 1)
      {
       Start = ThisIntTime;
+      ActivIntrpt = true;
      }
    if (eventCounter == SampleCnt+1)
      {
@@ -270,6 +274,7 @@ void SpindleTachInterrupt(void)
    eventCounter +=1;
    if (eventCounter >= SampleCnt+2)
     {
+    //ActivIntrpt = false;  
     if (period ==0) sprintf (buf,"Too Small");
     else
      {
@@ -343,8 +348,10 @@ void setup()
 // ================================================================
 void loop() 
 {
-  int UsrInput = 0;
+  //int UsrInput = 0;
   int stopCnt = 0;
+  bool UpdtDis = false;
+  unsigned long CurPrdTime;
   lcd.setCursor(0,1);
   lcd.print("Speed Cntl Ready");
   lcd.setCursor(0,0);
@@ -354,35 +361,35 @@ void loop()
   //then LCD setup seemed to go OK, & you're ready to start the speed control stuff
 
   // Calc initial dutycycle based on trgtRPM
-   SpndlPWM = (int) 95.0*(trgtRPM/9800.0)*(trgtRPM/9800.0) ; //190.5*(trgtRPM/9800.0)*(trgtRPM/9800.0)
+  // SpndlPWM = (int) 95.0*(trgtRPM/9800.0)*(trgtRPM/9800.0) ; //190.5*(trgtRPM/9800.0)*(trgtRPM/9800.0)
 
-   // display counter value every 1/4 second.
+  // display counter value every 1/4 second.
   //sprintf (buf, "Time %d Max %d\n", TotalRunTime, MaxRunTime);
   //Serial1.println(buf);
   while ( TotalRunTime <= MaxRunTime && !ExitNow )
   {
-    
-    if(micros()-Start>=Maxperiod ){// if true, it looks like the motor isn't turning
+    CurPrdTime = millis()-LstIntTime;
+     //Serial.println(CurPrdTime);
+    if(CurPrdTime >= Maxperiod/1000 ){// if true, it looks like the motor isn't turning
+     
       eventCounter = 0;
       LoopCounter = 0;
-      Start = micros();
+      LstIntTime = millis();
       NewTrgtVal = true;
+      ActivIntrpt = false; 
     }
-    while (eventCounter == 0 && LoopCounter == 0 &&  TotalRunTime <= MaxRunTime && !ExitNow)
+    //while (eventCounter == 0 && LoopCounter == 0 &&  TotalRunTime <= MaxRunTime && !ExitNow)
+     while (!ActivIntrpt &&  TotalRunTime <= MaxRunTime && !ExitNow)
      {
       //Motor is not running, So initialize PID for next startup
       //SpndlPWM = (int) 190.5*(trgtRPM/9800.0)*(trgtRPM/9800.0) ;
       ResetSpindle();
       SpndlPWM = 15;
-//      SetPoint = 2000;
-//      ITerm = 0.0; //kill any residual Integral component that might be left over from a previous run
-//      lastTime = millis();// reset/establish time mark for initial PID calculation   
-//      analogWrite(PWMpin, SpndlPWM); //start the PWM output
       //sprintf (buf, "PWMpin:%02i PWM:%02i", PWMpin, SpndlPWM);
       //Serial.println(buf);
-      //Startup, in this version of the code is not used 
-      //Startup = 60; // Locks out pid calcs on startup to give the default throttle setting a chance to take effect before correcting it
-      delay(100);
+      //delay(100);
+      UpdtDis = ScanButtons();
+      
       if (NewTrgtVal)
        {
          lcd.setCursor(0,0); //lcd.setCursor(pos,line)
@@ -392,14 +399,9 @@ void loop()
          lcd.print("Speed Cntl Ready");
          NewTrgtVal = false;
        }
-      UsrInput =  ScanButtons();
-      UpDateSettings(UsrInput, Mode);
-      while (Mode == 3){// Run Scope Mode Routine
-      ScopeMode();
-      UsrInput =  ScanButtons();
-      UpDateSettings(UsrInput, Mode);
+      if (Mode == 3){// Run Scope Mode Routine
+        ScopeMode();
       }
-     
       long TotalRunTime = calcruntime();
       //SuspectRdCnt = 3;
       stopCnt = stopCnt+1;
@@ -412,54 +414,57 @@ void loop()
       lcd.print(buf);
       NewTrgtVal = false;
     }
-   lcd.setCursor(0,1);//lcdPosition (lcdHandle, 0, 1) ;
-   if (Mode == 7) // Original Display Mode; Show Measured RPM, on the 2nd line
-    {
-     //lcdPrintf (lcdHandle, "Actl RPM: %d  ", calcrpm) ;
-     sprintf (buf, "%s %04i  ", "Actl RPM:", calcrpm);
-     lcd.print(buf);
-    }
-   if (Mode == 5) // Display Duty Cycle Mode
-    {
-     char DsplyStr[16];
-     char BlnkChr [1];
-     sprintf(DsplyStr, "Duty Cycle: %d ", dutycycle );// convert SpdEr to a String
-     strncpy( BlnkChr, " ", 1);// now fill out the rest of the display message/line with Blanks
-                               //[to ensure previous message has been erased
-     while (strlen(DsplyStr)<16)
+    if (UpdtDis){
+      lcd.setCursor(0,1);//lcdPosition (lcdHandle, 0, 1) ;
+     if (Mode == 7) // Original Display Mode; Show Measured RPM, on the 2nd line
       {
-       strcat(DsplyStr, BlnkChr);
+       //lcdPrintf (lcdHandle, "Actl RPM: %d  ", calcrpm) ;
+       sprintf (buf, "%s %04i  ", "Actl RPM:", calcrpm);
+       lcd.print(buf);
       }
-     //lcdPrintf (lcdHandle,"%s", DsplyStr);
-     //sprintf (buf, "%s %04i ", "Actl RPM:", calcrpm);
-     lcd.print(DsplyStr);
-    }
-   if (Mode == 6) // show Speed error Mode
-    {
-     char SpdErStr[6];
-     char SgndErStr[8];
-     char *pntr;
-     int SpdEr =  calcrpm-trgtRPM;
-     sprintf(SpdErStr, "%d",SpdEr );// convert SpdEr to a String
-     pntr = strchr (SpdErStr, '-');
-     if(pntr == NULL)
+     if (Mode == 5) // Display Duty Cycle Mode
       {
-       strncpy(SgndErStr, " +", 8);
-       strcat(SgndErStr, SpdErStr);
+       char DsplyStr[16];
+       char BlnkChr [1];
+       sprintf(DsplyStr, "Duty Cycle: %d ", dutycycle );// convert SpdEr to a String
+       strncpy( BlnkChr, " ", 1);// now fill out the rest of the display message/line with Blanks
+                                 //[to ensure previous message has been erased
+       while (strlen(DsplyStr)<16)
+        {
+         strcat(DsplyStr, BlnkChr);
+        }
+       //lcdPrintf (lcdHandle,"%s", DsplyStr);
+       //sprintf (buf, "%s %04i ", "Actl RPM:", calcrpm);
+       lcd.print(DsplyStr);
       }
-     else
+     if (Mode == 6) // show Speed error Mode
       {
-       strncpy(SgndErStr, " ", 8);
-       strcat(SgndErStr, SpdErStr);
+       char SpdErStr[6];
+       char SgndErStr[8];
+       char *pntr;
+       int SpdEr =  calcrpm-trgtRPM;
+       sprintf(SpdErStr, "%d",SpdEr );// convert SpdEr to a String
+       pntr = strchr (SpdErStr, '-');
+       if(pntr == NULL)
+        {
+         strncpy(SgndErStr, " +", 8);
+         strcat(SgndErStr, SpdErStr);
+        }
+       else
+        {
+         strncpy(SgndErStr, " ", 8);
+         strcat(SgndErStr, SpdErStr);
+        }
+       strncpy( SpdErStr, " ", 6);
+       while (strlen(SgndErStr)<8)
+        {
+         strcat(SgndErStr, SpdErStr);
+        }
+       //lcdPrintf (lcdHandle, "Spd Err:%s", SgndErStr ) ;
+       sprintf (buf, "%s%s ", "Spd Err:", SgndErStr);
+       lcd.print(buf);
       }
-     strncpy( SpdErStr, " ", 6);
-     while (strlen(SgndErStr)<8)
-      {
-       strcat(SgndErStr, SpdErStr);
-      }
-     //lcdPrintf (lcdHandle, "Spd Err:%s", SgndErStr ) ;
-     sprintf (buf, "%s%s ", "Spd Err:", SgndErStr);
-     lcd.print(buf);
+      
     }
 // ############ Begin BarGraph Mode #################
    if (Mode == 4)// PWM Bar Graph Mode
@@ -469,6 +474,7 @@ void loop()
      int postn = 0;
      int remainder = 0;
      int rowWeight;
+     lcd.setCursor(0,1);//lcdPosition (lcdHandle, 0, 1) ;
      FullCell =  100/16;//(Maxdutycycle - Mindutycycle)/16;
      rowWeight = FullCell/5;
 //   First, fill in the whole spaces
@@ -522,20 +528,8 @@ void loop()
    }
 // ############ End O-Scope Mode #################    
     
-   UsrInput =  ScanButtons();
-   UpDateSettings(UsrInput, Mode);
-   delay( 250 ); // wait 1/4 second(s)
-    LoopCounter = LoopCounter + 1;
-
-    if (LoopCounter >= 8)
-     {
-      LoopCounter = 0;
-      eventCounter = 0;
-//      TooHighCnt = 0;
-//      TooLowCnt = 0;
-      NewTrgtVal = true;
-      //Serial1.print("Looks as if Motor has Stopped\n");
-     }
+  
+   UpdtDis = ScanButtons();
    long TotalRunTime = calcruntime();
   } //end of 1st while loop
  //kill the PWM signal
@@ -645,17 +639,24 @@ void SetPIDOutLimits(double Min, double Max)
 // ================================================================
 
 
-static int ScanButtons()
+bool ScanButtons()
 {
-  int buttons = 0;
-  int buttonPressed = Keypad.button();
-  if (buttonPressed==KEYPAD_UP) buttons += 1;
-  if (buttonPressed==KEYPAD_DOWN) buttons += 2;
-  if (buttonPressed==KEYPAD_LEFT) buttons += 4;
-  if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
-  if (buttonPressed==KEYPAD_SELECT) buttons += 16;
-  if (buttonPressed==KEYPAD_NONE) NuInput = true;
-  return buttons;
+  if (millis()-QrtrSecTimeOut >250){
+    QrtrSecTimeOut = millis();
+    int buttons = 0;
+    int buttonPressed = Keypad.button();
+    if (buttonPressed==KEYPAD_UP) buttons += 1;
+    if (buttonPressed==KEYPAD_DOWN) buttons += 2;
+    if (buttonPressed==KEYPAD_LEFT) buttons += 4;
+    if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
+    if (buttonPressed==KEYPAD_SELECT) buttons += 16;
+    if (buttonPressed==KEYPAD_NONE) NuInput = true;
+    //return buttons;
+    LoopCounter = LoopCounter + 1;
+    UpDateSettings(buttons, Mode);
+    return true;
+  }
+  else return false;
 }
 
 void UpDateSettings(int UsrInput, int mode)
@@ -664,33 +665,33 @@ void UpDateSettings(int UsrInput, int mode)
     {
       if(UsrInput == 1 || UsrInput == 2) //[Display Up or Down Button]  Speed, $
        {
-         if (mode == 3)
-          {
-           if(UsrInput == 1 )
-            {
-             if (BackLight <7)
-              {
-               BackLight = BackLight+1;
-              }
-             else
-              {
-               BackLight = 1;
-              }
-            }
-           else
-            {
-             if (BackLight >1)
-              {
-               BackLight = BackLight-1;
-              }
-             else
-              {
-               BackLight = 7;
-              }
-            }
-           //setBacklightColour (BackLight) ;
-          }
-         else
+//         if (mode == 3)
+//          {
+//           if(UsrInput == 1 )
+//            {
+//             if (BackLight <7)
+//              {
+//               BackLight = BackLight+1;
+//              }
+//             else
+//              {
+//               BackLight = 1;
+//              }
+//            }
+//           else
+//            {
+//             if (BackLight >1)
+//              {
+//               BackLight = BackLight-1;
+//              }
+//             else
+//              {
+//               BackLight = 7;
+//              }
+//            }
+//           //setBacklightColour (BackLight) ;
+//          }
+//         else
           {
            NewTrgtVal = true;
            if(UsrInput == 1 )
@@ -795,9 +796,11 @@ void ScopeMode(){
   AsmplCnt =0;
   int uSWait = (int)((period/(SampleCnt*10))-900)/8; // returns the number of micro seconds to wait/sample to collect 80 data points given the current spindle speed
 //      Serial.println("Mode3");
+  if (!ActivIntrpt) KeepWaiting = !KeepWaiting;
   while(eventCounter == 0 & KeepWaiting){
     LoopTime = micros()-GoNow;
     if (LoopTime > 300000){
+      ActivIntrpt = false;
       KeepWaiting = false;
     }
   } 
@@ -805,6 +808,7 @@ void ScopeMode(){
    
     LoopTime = micros()-GoNow;
     if (LoopTime > 300000){
+       ActivIntrpt = false;
       KeepWaiting = false;
     }
   }
