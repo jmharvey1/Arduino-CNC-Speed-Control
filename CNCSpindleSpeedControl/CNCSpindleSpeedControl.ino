@@ -100,6 +100,7 @@ int SampleCnt = 10; // Number Spindle Relolutions needed to make a new RPM calcu
 unsigned long period;
 unsigned long Maxperiod;
 
+int UsrInput = 0;
 int PWMpin; // Digital Pin that PWM signal appears on (Pin 13 = Leonardo; Pin 11 = Uno)
 int calcrpm = 0;
 int sensorPin = A1; // Used for Oscope Mode (mode 3)
@@ -135,6 +136,7 @@ bool NewTrgtVal = true; //used to determine if display needs updating
 bool ExitNow = false;
 bool NuInput = true;
 bool ActivIntrpt = false;
+bool chkBtns = true;
 //char *intFlgStat;
 //int ThrtlLpCnt= 0;
 //int Startup = 0; // Locks out pid calcs on startup to give the default throttle setting a chance to take effect before correcting it
@@ -348,9 +350,10 @@ void setup()
 // ================================================================
 void loop() 
 {
-  //int UsrInput = 0;
+ 
   int stopCnt = 0;
   bool UpdtDis = false;
+  chkBtns = true;
   unsigned long CurPrdTime;
   lcd.setCursor(0,1);
   lcd.print("Speed Cntl Ready");
@@ -530,6 +533,7 @@ void loop()
     
   
    UpdtDis = ScanButtons();
+   if (UpdtDis)  LoopCounter++;
    long TotalRunTime = calcruntime();
   } //end of 1st while loop
  //kill the PWM signal
@@ -641,113 +645,108 @@ void SetPIDOutLimits(double Min, double Max)
 
 bool ScanButtons()
 {
-  if (millis()-QrtrSecTimeOut >250){
-    QrtrSecTimeOut = millis();
-    int buttons = 0;
-    int buttonPressed = Keypad.button();
+  if(!chkBtns){
+    if (millis()-QrtrSecTimeOut >250){
+      QrtrSecTimeOut = millis();
+      //LoopCounter = LoopCounter + 1;
+      chkBtns = !chkBtns;
+    }
+    else return false;
+  }
+  
+  
+  int buttonPressed = Keypad.button();
+  if (buttonPressed==KEYPAD_NONE){
+    NuInput = true;
+     return true;
+  }
+  int buttons = 0;
+  int NubtnVal = 0;
+  if (buttonPressed==KEYPAD_UP) buttons += 1;
+  if (buttonPressed==KEYPAD_DOWN) buttons += 2;
+  if (buttonPressed==KEYPAD_LEFT) buttons += 4;
+  if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
+  if (buttonPressed==KEYPAD_SELECT) buttons += 16;
+  bool Same = true;
+  int i = 0;
+  NubtnVal = buttons;
+  // Switch debounce code to help ensure a true button reading
+  while(i<6 && NubtnVal == buttons){
+    buttonPressed = Keypad.button();
+    buttons = 0; 
     if (buttonPressed==KEYPAD_UP) buttons += 1;
     if (buttonPressed==KEYPAD_DOWN) buttons += 2;
     if (buttonPressed==KEYPAD_LEFT) buttons += 4;
     if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
     if (buttonPressed==KEYPAD_SELECT) buttons += 16;
-    if (buttonPressed==KEYPAD_NONE) NuInput = true;
-    //return buttons;
-    LoopCounter = LoopCounter + 1;
-    UpDateSettings(buttons, Mode);
-    return true;
+    if (NubtnVal == buttons) i++;
+    else {
+      NubtnVal = buttons;
+      i= 0;
+    }
   }
-  else return false;
+  if (buttons > 0 ) chkBtns = false;;
+  UpDateSettings(buttons, Mode);
+  return true;
 }
 
 void UpDateSettings(int UsrInput, int mode)
 {
-   if (UsrInput !=0)
-    {
-      if(UsrInput == 1 || UsrInput == 2) //[Display Up or Down Button]  Speed, $
-       {
-//         if (mode == 3)
-//          {
-//           if(UsrInput == 1 )
-//            {
-//             if (BackLight <7)
-//              {
-//               BackLight = BackLight+1;
-//              }
-//             else
-//              {
-//               BackLight = 1;
-//              }
-//            }
-//           else
-//            {
-//             if (BackLight >1)
-//              {
-//               BackLight = BackLight-1;
-//              }
-//             else
-//              {
-//               BackLight = 7;
-//              }
-//            }
-//           //setBacklightColour (BackLight) ;
-//          }
-//         else
+  if(UsrInput == 1 || UsrInput == 2) //[Display Up or Down Button]  Speed, $
+   {
+      {
+       NewTrgtVal = true;
+       if(UsrInput == 1 )
+        {
+         if (trgtRPM <10000)
           {
-           NewTrgtVal = true;
-           if(UsrInput == 1 )
-            {
-             if (trgtRPM <10000)
-              {
-               trgtRPM = trgtRPM+200;
-              }
-            }
-           else
-            {
-             if (trgtRPM >1500)
-              {
-                trgtRPM = trgtRPM-200;
-              }
-            }
+           trgtRPM = trgtRPM+200;
           }
-       }
-      if((UsrInput == 4 || UsrInput == 8) && NuInput == true) //[Display Left o$
-       {
+        }
+       else
+        {
+         if (trgtRPM >1500)
+          {
+            trgtRPM = trgtRPM-200;
+          }
+        }
+      }
+   }
+  if((UsrInput == 4 || UsrInput == 8) &&  NuInput) //[Display Left o$
+   {
+    NuInput = false;
 //        Serial1.print("NuInput %s\n", NuInput ? "true" : "false");
-        if (Mode == 3){ //user is leaving Scope mode so restore Display
-          lcd.setCursor(0,0);
-          lcd.clear();
-          sprintf (buf,"Trgt RPM: %d", trgtRPM);
-          lcd.print(buf);
+    if (Mode == 3){ //user is leaving Scope mode so restore Display
+      lcd.setCursor(0,0);
+      lcd.clear();
+      sprintf (buf,"Trgt RPM: %d", trgtRPM);
+      lcd.print(buf);
+    }
+    if (UsrInput == 4)
+     {
+       Mode = Mode +1;
+       if (Mode == 8)
+        {
+          Mode = 3;
+          //Mode = 4;
+        }
+     }
+    else
+     {
+       Mode = Mode- 1;
+       if (Mode == 2)
+        {
+          Mode = 7;
         }
 
-
-        NuInput = false;
-        if (UsrInput == 4)
-         {
-           Mode = Mode +1;
-           if (Mode == 8)
-            {
-              Mode = 3;
-              //Mode = 4;
-            }
-         }
-        else
-         {
-           Mode = Mode- 1;
-           if (Mode == 2)
-            {
-              Mode = 7;
-            }
-
-         }
-        //setBacklightColour (BackLight);
-        if (Mode == 4) LoadBarGraphFont();//user just selected bargraph mode; load custom characters to support
-       }
-      if (UsrInput ==16)
-       {
-          ExitNow = true;
-       }
-    }
+     }
+    //setBacklightColour (BackLight);
+    if (Mode == 4) LoadBarGraphFont();//user just selected bargraph mode; load custom characters to support
+   }
+  if (UsrInput ==16)
+   {
+      ExitNow = true;
+   }
 }
 
 
