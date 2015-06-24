@@ -662,44 +662,41 @@ void ScanButtons()
     }
     else return;
   }
-  
-  
-  int buttonPressed = Keypad.button();
-  if (buttonPressed==KEYPAD_NONE){
+  int buttons = DecodeButton();
+  if (buttons == -1){
     NuInput = true;
      return;
   }
-  int buttons = 0;
-  int NubtnVal = 0;
-  if (buttonPressed==KEYPAD_UP) buttons += 1;
-  if (buttonPressed==KEYPAD_DOWN) buttons += 2;
-  if (buttonPressed==KEYPAD_LEFT) buttons += 4;
-  if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
-  if (buttonPressed==KEYPAD_SELECT) buttons += 16;
-  //bool Same = true;
+  int NubtnVal = buttons; //remember previous button reading
   int i = 0;
-  NubtnVal = buttons; //remember previous button reading
-  // Switch debounce code to help ensure a true button reading
-  while(i<6 ){
-    buttonPressed = Keypad.button();
-    buttons = 0; 
-    if (buttonPressed==KEYPAD_UP) buttons += 1;
-    if (buttonPressed==KEYPAD_DOWN) buttons += 2;
-    if (buttonPressed==KEYPAD_LEFT) buttons += 4;
-    if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
-    if (buttonPressed==KEYPAD_SELECT) buttons += 16;
+  // Button debounce code to help ensure a true button reading
+  while(i<200 ){
+    buttons = DecodeButton(); 
     if (NubtnVal == buttons) i++;
-    else {// doesn't match; Rest & Start over
+    else {// doesn't match; Reset & Start over
       NubtnVal = buttons;
       i= 0;
     }
   }
   if (buttons > 0 ){
     chkBtns = false;// lock out new button scan for another delay interval (original wait period was250 ms)
-    QrtrSecTimeOut = millis(); // reset 1/4 second timer
+    QrtrSecTimeOut = millis(); // reset delay interval timer
+    UpDateSettings(buttons, Mode);
   }
-  UpDateSettings(buttons, Mode);
+  
   return;
+}
+
+int DecodeButton(){
+  int buttons = 0;
+  int buttonPressed = Keypad.button();
+  if (buttonPressed==KEYPAD_NONE)return -1;
+  if (buttonPressed==KEYPAD_UP) buttons += 1;
+  if (buttonPressed==KEYPAD_DOWN) buttons += 2;
+  if (buttonPressed==KEYPAD_LEFT) buttons += 4;
+  if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
+  if (buttonPressed==KEYPAD_SELECT) buttons += 16;
+  return buttons;
 }
 
 void UpDateSettings(int UsrInput, int mode)
@@ -777,7 +774,8 @@ void ResetSpindle(){
   SpndlPWM = 15;
   SetPoint = 2000;
   ITerm = 0.0; //kill any residual Integral component that might be left over from a previous run
-  lastTime = millis();// reset/establish time mark for initial PID calculation   
+  lastTime = millis();// reset/establish time mark for initial PID calculation
+  attachInterrupt(InterruptId, SpindleTachInterrupt, FALLING); //UNO digital pin 3;   
   analogWrite(PWMpin, SpndlPWM); //start the PWM output
 }
 // -------------------------------------------------------------------------
