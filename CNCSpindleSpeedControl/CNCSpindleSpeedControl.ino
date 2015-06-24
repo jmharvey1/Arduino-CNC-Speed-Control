@@ -146,7 +146,7 @@ int Mode = 7;
 
 // the event counter
 volatile int eventCounter = 0;
-volatile int LoopCounter = 0;
+//volatile int LoopCounter = 0;
 
 char buf [16]; // used to concatenate strings & numerical data for display on SanSmart LCD
          
@@ -292,7 +292,7 @@ void SpindleTachInterrupt(void)
      SpndlPWM = CalcMtrPID(calcrpm);//Max+CalcMtrPID(calcrpm);
      analogWrite(PWMpin, SpndlPWM);
      dutycycle = (int)((SpndlPWM*100)/(Max));//(int)((SpndlPWM*100)/(2*Max));// convert PWM signal to a precentage
-    LoopCounter = 1;//reset loopcounter so main loop will know that Motor is still running
+   // LoopCounter = 1;//reset loopcounter so main loop will know that Motor is still running
     eventCounter = 0;
     }
 //   delay(3); //wait at least the equivalent of 20K rpm before reacting to another spindle interrupt
@@ -355,6 +355,7 @@ void loop()
   bool UpdtDis = false;
   chkBtns = true;
   unsigned long CurPrdTime;
+  unsigned long lstDspTime =millis();
   lcd.setCursor(0,1);
   lcd.print("Speed Cntl Ready");
   lcd.setCursor(0,0);
@@ -376,7 +377,7 @@ void loop()
     if(CurPrdTime >= Maxperiod/1000 ){// if true, it looks like the motor isn't turning
      
       eventCounter = 0;
-      LoopCounter = 0;
+     // LoopCounter = 0;
       LstIntTime = millis();
       NewTrgtVal = true;
       ActivIntrpt = false; 
@@ -391,7 +392,7 @@ void loop()
       //sprintf (buf, "PWMpin:%02i PWM:%02i", PWMpin, SpndlPWM);
       //Serial.println(buf);
       //delay(100);
-      UpdtDis = ScanButtons();
+      ScanButtons();
       
       if (NewTrgtVal)
        {
@@ -417,7 +418,13 @@ void loop()
       lcd.print(buf);
       NewTrgtVal = false;
     }
+    if((millis()-lstDspTime)>500){
+      UpdtDis= true;
+      lstDspTime =millis();
+    }
+    else UpdtDis= false;
     if (UpdtDis){
+      //Serial.println(millis()-lstDspTime);
       lcd.setCursor(0,1);//lcdPosition (lcdHandle, 0, 1) ;
      if (Mode == 7) // Original Display Mode; Show Measured RPM, on the 2nd line
       {
@@ -532,8 +539,10 @@ void loop()
 // ############ End O-Scope Mode #################    
     
   
-   UpdtDis = ScanButtons();
-   if (UpdtDis)  LoopCounter++;
+   ScanButtons();
+//   if (UpdtDis){
+//    LoopCounter++;
+//   }
    long TotalRunTime = calcruntime();
   } //end of 1st while loop
  //kill the PWM signal
@@ -643,7 +652,7 @@ void SetPIDOutLimits(double Min, double Max)
 // ================================================================
 
 
-bool ScanButtons()
+void ScanButtons()
 {
   if(!chkBtns){
     if (millis()-QrtrSecTimeOut >250){
@@ -651,14 +660,14 @@ bool ScanButtons()
       //LoopCounter = LoopCounter + 1;
       chkBtns = !chkBtns;
     }
-    else return false;
+    else return;
   }
   
   
   int buttonPressed = Keypad.button();
   if (buttonPressed==KEYPAD_NONE){
     NuInput = true;
-     return true;
+     return;
   }
   int buttons = 0;
   int NubtnVal = 0;
@@ -667,11 +676,11 @@ bool ScanButtons()
   if (buttonPressed==KEYPAD_LEFT) buttons += 4;
   if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
   if (buttonPressed==KEYPAD_SELECT) buttons += 16;
-  bool Same = true;
+  //bool Same = true;
   int i = 0;
-  NubtnVal = buttons;
+  NubtnVal = buttons; //remember previous button reading
   // Switch debounce code to help ensure a true button reading
-  while(i<6 && NubtnVal == buttons){
+  while(i<6 ){
     buttonPressed = Keypad.button();
     buttons = 0; 
     if (buttonPressed==KEYPAD_UP) buttons += 1;
@@ -680,14 +689,17 @@ bool ScanButtons()
     if (buttonPressed==KEYPAD_RIGHT) buttons += 8;
     if (buttonPressed==KEYPAD_SELECT) buttons += 16;
     if (NubtnVal == buttons) i++;
-    else {
+    else {// doesn't match; Rest & Start over
       NubtnVal = buttons;
       i= 0;
     }
   }
-  if (buttons > 0 ) chkBtns = false;;
+  if (buttons > 0 ){
+    chkBtns = false;// lock out new button scan for another delay interval (original wait period was250 ms)
+    QrtrSecTimeOut = millis(); // reset 1/4 second timer
+  }
   UpDateSettings(buttons, Mode);
-  return true;
+  return;
 }
 
 void UpDateSettings(int UsrInput, int mode)
